@@ -15,6 +15,8 @@ third_party_dir := $(project_dir)/third_party
 
 jswasi_sources := $(shell find $(project_dir)/src -type f -name '*.ts')
 jswasi_compiled := $(subst $(project_dir)/src,$(work_dir),$(jswasi_sources:.ts=.js))
+jswasi_decls := $(subst $(project_dir)/src,$(work_dir),$(jswasi_sources:.ts=.d.ts))
+jswasi_decls_dist := $(subst $(work_dir),$(dist_dir),$(jswasi_decls))
 
 index_dist := $(dist_dir)/index.html
 
@@ -27,7 +29,7 @@ VERSION := $(shell cat $(project_dir)/src/VERSION)
 standalone: embed $(resources_dist) $(index_dist) $(third_party_dist_dir)/hterm.js
 
 .PHONY: embed
-embed: $(if $(MINIFY),$(dist_dir)/jswasi.js,$(subst $(work_dir),$(dist_dir),$(jswasi_compiled)) $(third_party_dist_dir)/vfs.js $(third_party_dist_dir)/idb-keyval.js $(third_party_dist_dir)/js-untar.js)
+embed: $(if $(MINIFY),$(dist_dir)/jswasi.js,$(subst $(work_dir),$(dist_dir),$(jswasi_compiled)) $(third_party_dist_dir)/vfs.js $(third_party_dist_dir)/idb-keyval.js $(third_party_dist_dir)/js-untar.js) $(jswasi_decls_dist)
 
 .PHONY: clean
 clean:
@@ -92,6 +94,8 @@ else
 index := $(assets_dir)/index-module.html
 $(dist_dir)/%.js: $(work_dir)/%.js | $(dist_dir)
 	install -D -m644 $< $@
+$(dist_dir)/%.d.ts: $(jswasi_compiled) | $(dist_dir)
+	install -D -m644 $(work_dir)/$*.d.ts $@
 endif
 
 $(index_dist): $(index) | $(dist_dir)

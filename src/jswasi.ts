@@ -9,10 +9,10 @@ import {
   major,
 } from "./filesystem/virtual-filesystem/devices/driver-manager.js";
 import { printk } from "./utils.js";
-// @ts-ignore
-import untar from "./third_party/js-untar.js";
 import { HtermDeviceDriver } from "./filesystem/virtual-filesystem/terminals/hterm-terminal.js";
 import { JsInterface } from "./js-interface.js";
+
+export * as constants from "./constants.js";
 
 declare global {
   interface Window {
@@ -24,13 +24,16 @@ declare global {
 
 export class Jswasi {
   private processManager: ProcessManager;
-  private topLevelFs: TopLevelFs;
+  public topLevelFs: TopLevelFs;
   private driverManager: DriverManager;
   private deviceFilesystem: DeviceFilesystem;
   private devFsPromise: Promise<void>;
+  public initializing?: Promise<boolean>;
+
   public jsInterface: JsInterface;
 
   private __printk(msg: string) {
+    console.log('printk: ', msg)
     try {
       const term = (this.driverManager.getDriver(major.MAJ_HTERM) as HtermDeviceDriver).terminals[0].terminal
       term.io.println(printk(msg));
@@ -40,7 +43,7 @@ export class Jswasi {
   constructor() {
     this.driverManager = new DriverManager();
     this.topLevelFs = new TopLevelFs();
-    this.processManager = new ProcessManager("process.js", this.topLevelFs, this.driverManager);
+    this.processManager = new ProcessManager(new URL("./process.js", import.meta.url), this.topLevelFs, this.driverManager);
     this.devFsPromise = createDeviceFilesystem(this.driverManager, this.processManager).then(devfs => {
       this.deviceFilesystem = devfs;
     });
@@ -78,139 +81,157 @@ export class Jswasi {
   }
 
   public async init(config?: KernelConfig, useServiceWorker: boolean = true): Promise<void> {
-    await this.devFsPromise;
+    let resolve: (value: boolean) => void;
+    let reject: (reason?: any) => void;
+    this.initializing = new Promise<boolean>((_resolve, _reject) => {
+      resolve = _resolve;
+      reject = _reject;
+    });
 
-    if (!navigator.storage.getDirectory) {
-      this.__printk(
-        "Your browser doesn't support File System Access API yet."
-      );
-      this.__printk("We recommend using Chrome for the time being.");
-      return;
-    }
+    try {
+      console.log('awaitning devFsPromise');
+      await this.devFsPromise;
+      console.log('devFsPromise resolved');
 
-    if (useServiceWorker) {
-      this.__printk('Registering service worker');
-      if (!(await initServiceWorker())) {
-        this.__printk("Service Worker registration failed");
+      if (!navigator.storage.getDirectory) {
+        this.__printk(
+          "Your browser doesn't support File System Access API yet."
+        );
+        this.__printk("We recommend using Chrome for the time being.");
         return;
       }
-    }
 
-    // If SharedArrayBuffer is undefined then most likely, the service
-    // worker has not yet reloaded the page. In such case, stop further
-    // execution so that it is not abruptly interrupted by the page being
-    // reloaded.
-    if (typeof SharedArrayBuffer === 'undefined') {
       if (useServiceWorker) {
-        this.__printk("SharedArrayBuffer undefined, reloading page");
-        // On chromium, window.location.reload sometimes does not work.
-        window.location.href = window.location.href;
-      } else {
-        this.__printk("SharedArrayBuffer undefined, aborting");
-      }
-      return;
-    }
-
-    if (config == undefined) {
-      this.__printk('Reading kernel config');
-      config = await getKernelConfig(this.topLevelFs);
-    }
-
-    if (
-      (await mountRootfs(this.topLevelFs, config.mountConfig)) !==
-      constants.WASI_ESUCCESS
-    ) {
-      this.__printk("Failed to mount root filesystem");
-    }
-
-    // If the init system is present in the filesystem, assume that the rootfs
-    // is already initialized
-    this.__printk("Reading init system");
-    const { err } = await this.topLevelFs.open(
-      config.init,
-      constants.WASI_LOOKUPFLAGS_SYMLINK_FOLLOW,
-    );
-
-    if (err !== constants.WASI_ESUCCESS) {
-      this.__printk('Init system not present');
-      this.__printk('Starting rootfs initialization');
-      // Use the default rootfs if it is not defined in the kernel config
-      let __rootfs = config.rootfs;
-      if (__rootfs === undefined) {
-        this.__printk('Rootfs image not configured in kernel config, using default');
-        __rootfs = "https://antmicro.github.io/jswasi-rootfs/rootfs.tar.gz";
+        this.__printk('Registering service worker');
+        if (!(await initServiceWorker())) {
+          this.__printk("Service Worker registration failed");
+          return;
+        }
       }
 
-      const rootfsTarResponse = await fetch(__rootfs);
-      const contentEncoding = rootfsTarResponse.headers.get("Content-Encoding");
-      let tarStream = rootfsTarResponse.body;
+      // If SharedArrayBuffer is undefined then most likely, the service
+      // worker has not yet reloaded the page. In such case, stop further
+      // execution so that it is not abruptly interrupted by the page being
+      // reloaded.
+      if (typeof SharedArrayBuffer === 'undefined') {
+        if (useServiceWorker) {
+          this.__printk("SharedArrayBuffer undefined, reloading page");
+          // On chromium, window.location.reload sometimes does not work.
+          window.location.href = window.location.href;
+        } else {
+          this.__printk("SharedArrayBuffer undefined, aborting");
+        }
+        return;
+      }
 
-      if (contentEncoding === "gzip") {
-        tarStream = gunzip(tarStream);
-      } else if (!contentEncoding) {
-        const contentType = rootfsTarResponse.headers.get("Content-Type");
-        if (contentType === "application/gzip" || contentType === "application/x-gzip")
+      if (config == undefined) {
+        this.__printk('Reading kernel config');
+        config = await getKernelConfig(this.topLevelFs);
+      }
+
+      if (
+        (await mountRootfs(this.topLevelFs, config.mountConfig)) !==
+        constants.WASI_ESUCCESS
+      ) {
+        this.__printk("Failed to mount root filesystem");
+      }
+
+      // If the init system is present in the filesystem, assume that the rootfs
+      // is already initialized
+      this.__printk("Reading init system");
+      const { err } = await this.topLevelFs.open(
+        config.init,
+        constants.WASI_LOOKUPFLAGS_SYMLINK_FOLLOW,
+      );
+
+      if (err !== constants.WASI_ESUCCESS) {
+        this.__printk('Init system not present');
+        this.__printk('Starting rootfs initialization');
+        // Use the default rootfs if it is not defined in the kernel config
+        let __rootfs = config.rootfs;
+        if (__rootfs === undefined) {
+          this.__printk('Rootfs image not configured in kernel config, using default');
+          __rootfs = "https://antmicro.github.io/jswasi-rootfs/rootfs.tar.gz";
+        }
+
+        const rootfsTarResponse = await fetch(__rootfs);
+        const contentEncoding = rootfsTarResponse.headers.get("Content-Encoding");
+        let tarStream = rootfsTarResponse.body;
+
+        if (contentEncoding === "gzip") {
           tarStream = gunzip(tarStream);
+        } else if (!contentEncoding) {
+          const contentType = rootfsTarResponse.headers.get("Content-Type");
+          if (contentType === "application/gzip" || contentType === "application/x-gzip")
+            tarStream = gunzip(tarStream);
+        }
+
+        if (err === constants.WASI_ENOTRECOVERABLE) {
+          this.__printk('Root filesystem corrupted, attempting recovery mode');
+          this.topLevelFs.removeMount("/");
+          const conf = RECOVERY_MOUNT_CONFIG;
+
+          // If there is an error, nothing can be done
+          await mountRootfs(this.topLevelFs, conf);
+          this.__printk('VirtualFilesystem mounted on /');
+
+          await initFs(this.topLevelFs, await new Response(tarStream).arrayBuffer());
+          await recoveryMotd(this.topLevelFs);
+        } else {
+          await initFs(this.topLevelFs, await new Response(tarStream).arrayBuffer());
+        }
+        this.__printk('Rootfs initialized');
       }
 
-      if (err === constants.WASI_ENOTRECOVERABLE) {
-        this.__printk('Root filesystem corrupted, attempting recovery mode');
-        this.topLevelFs.removeMount("/");
-        const conf = RECOVERY_MOUNT_CONFIG;
+      await this.topLevelFs.createDir("/dev");
+      this.__printk('Mounting device filesystem');
+      await this.topLevelFs.addMountFs(
+        "/dev",
+        this.deviceFilesystem
+      );
 
-        // If there is an error, nothing can be done
-        await mountRootfs(this.topLevelFs, conf);
-        this.__printk('VirtualFilesystem mounted on /');
+      await this.topLevelFs.createDir("/proc");
+      this.__printk('Mounting proc filesystem');
+      await this.topLevelFs.addMountFs("/proc", new ProcFilesystem(this.processManager));
 
-        await initFs(this.topLevelFs, await new Response(tarStream).arrayBuffer());
-        await recoveryMotd(this.topLevelFs);
-      } else {
-        await initFs(this.topLevelFs, await new Response(tarStream).arrayBuffer());
+      await this.topLevelFs.createDir("/tmp");
+      this.__printk('Mounting temp filesystem');
+      await this.topLevelFs.addMount(undefined, "", undefined, "/tmp", "vfs", 0n, {});
+
+      let res = await this.topLevelFs.open("/");
+      if (res.err) {
+        this.__printk("Could not open root file descriptor for the init system");
+        return;
       }
-      this.__printk('Rootfs initialized');
+
+      // This is a hacky way of adding a foreground to a process
+      const __res = await this.topLevelFs.open("/dev/ttyH0");
+      const foreground = __res.err === constants.WASI_ESUCCESS ?
+        { maj: major.MAJ_HTERM, min: 0 } : null;
+
+      this.__printk('Starting init');
+      resolve(true);
+
+      await this.processManager.spawnProcess(
+        null, // parent_id
+        null, // parent_lock
+        config.init,
+        new FdTable({
+          3: new DescriptorEntry(res.desc),
+        }),
+        config.initArgs,
+        DEFAULT_ENV,
+        false,
+        DEFAULT_WORK_DIR,
+        foreground
+      );
+      console.log('spawned init process');
+    } catch (e) {
+      console.error('Error initializing:', e);
+      reject(e);
     }
-
-    await this.topLevelFs.createDir("/dev");
-    this.__printk('Mounting device filesystem');
-    await this.topLevelFs.addMountFs(
-      "/dev",
-      this.deviceFilesystem
-    );
-
-    await this.topLevelFs.createDir("/proc");
-    this.__printk('Mounting proc filesystem');
-    await this.topLevelFs.addMountFs("/proc", new ProcFilesystem(this.processManager));
-
-    await this.topLevelFs.createDir("/tmp");
-    this.__printk('Mounting temp filesystem');
-    await this.topLevelFs.addMount(undefined, "", undefined, "/tmp", "vfs", 0n, {});
-
-    let res = await this.topLevelFs.open("/");
-    if (res.err) {
-      this.__printk("Could not open root file descriptor for the init system");
-      return;
-    }
-
-    // This is a hacky way of adding a foreground to a process
-    const __res = await this.topLevelFs.open("/dev/ttyH0");
-    const foreground = __res.err === constants.WASI_ESUCCESS ?
-      { maj: major.MAJ_HTERM, min: 0 } : null;
-
-    this.__printk('Starting init');
-    await this.processManager.spawnProcess(
-      null, // parent_id
-      null, // parent_lock
-      config.init,
-      new FdTable({
-        3: new DescriptorEntry(res.desc),
-      }),
-      config.initArgs,
-      DEFAULT_ENV,
-      false,
-      DEFAULT_WORK_DIR,
-      foreground
-    );
   }
+
 }
 
 const INIT_FSA_ID = "fsa0";
@@ -290,6 +311,8 @@ function gunzip(tarStream: ReadableStream): ReadableStream {
 
 // setup filesystem
 async function initFs(fs: TopLevelFs, tar: ArrayBuffer) {
+  // @ts-ignore
+  const untar = await import("./third_party/js-untar.js");
   const untared = await untar(tar);
 
   for (const entry of untared) {
@@ -325,22 +348,34 @@ async function initFs(fs: TopLevelFs, tar: ArrayBuffer) {
   }
 }
 
-function initServiceWorker(): Promise<boolean> {
+function initServiceWorker(customUrl?: string, scope?: string): Promise<boolean> {
+  if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
+    return Promise.resolve(false);
+  }
+  let url: string | URL;
+  if (customUrl) {
+    url = customUrl;
+  } else {
+    try {
+      url = new URL("./service-worker.js", import.meta.url);
+    } catch {
+      url = "service-worker.js";
+    }
+  }
   return new Promise(resolve => {
-    navigator.serviceWorker.register("service-worker.js").then(
+    navigator.serviceWorker.register(url, scope ? { scope } : undefined).then(
       registration => {
-        if (registration !== undefined) {
+        if (registration) {
           registration.onupdatefound = () => resolve(true);
-
-          if (registration.active)
-            resolve(true);
-        };
+          if (registration.active) resolve(true);
+        } else {
+          resolve(false);
+        }
       },
       _ => resolve(false),
     );
   });
 }
-
 type KernelConfig = {
   init: string;
   initArgs: string[];
@@ -371,7 +406,9 @@ async function getKernelConfig(tfs: TopLevelFs): Promise<KernelConfig> {
       } catch (_) { }
     }
     await desc.close();
-  } else {
+  }
+
+  if (kernelConfig === undefined) {
     await fetchFile(tfs, BOOT_KERNEL_CONFIG_PATH, "resources/config.json");
 
     const { desc } = await tfs.open(BOOT_KERNEL_CONFIG_PATH);

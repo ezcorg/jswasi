@@ -1,0 +1,42 @@
+{
+  "name": "@ezdevlol/jswasi",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Fork of https://github.com/antmicro/jswasi/",
+  "type": "module",
+  "license": "Apache-2.0",
+  "main": "./dist/jswasi.js",
+  "module": "./dist/jswasi.js",
+  "browser": "./dist/jswasi.js",
+  "types": "./dist/jswasi.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/jswasi.d.ts",
+      "import": "./dist/jswasi.js",
+      "default": "./dist/jswasi.js"
+    },
+    "./filesystem": {
+      "types": "./dist/filesystem/index.d.ts",
+      "import": "./dist/filesystem/index.js",
+      "default": "./dist/filesystem/index.js"
+    }
+  },
+  "files": [
+    "dist/**/*"
+  ],
+  "scripts": {
+    "tsc": "tsc -p tsconfig.json",
+    "tsc:watch": "tsc -p tsconfig.json --watch",
+    "build": "make embed",
+    "build:min": "MINIFY=1 make embed",
+    "standalone": "make standalone",
+    "clean": "make clean",
+    "clean:all": "make clean-all",
+    "test": "make test"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.10",
+    "typescript": "^5.6.0"
+  },
+  "packageManager": "pnpm@10.10.0"
+}

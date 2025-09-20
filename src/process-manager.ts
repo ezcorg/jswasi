@@ -195,7 +195,7 @@ export default class ProcessManager {
   public compiledModules: Record<string, WebAssembly.Module> = {};
 
   constructor(
-    private readonly scriptName: string,
+    private readonly scriptName: URL,
     public readonly filesystem: TopLevelFs,
     public driverManager: DriverManager,
     public processInfos: Record<number, ProcessInfo> = {}

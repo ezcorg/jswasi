@@ -235,7 +235,7 @@ export default async function syscallCallback(
             );
 
             if (err !== constants.WASI_ESUCCESS) {
-              console.log(`Spawn: cannot open file, error: ${err}`);
+              console.log(`Spawn: cannot open file at "${path}", error: ${err}`);
               exit_staus = constants.EXIT_FAILURE;
               break;
             }

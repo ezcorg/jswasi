@@ -45,9 +45,11 @@ export async function getFilesystem(
 
 export class TopLevelFs {
   private mounts: Record<string, Filesystem>;
+  private watchers: Set<{ path: string; enqueue: (e: { eventType: 'rename' | 'change'; filename: string; fullPath: string }) => void; signal: AbortSignal }>;
 
   constructor() {
     this.mounts = {};
+    this.watchers = new Set();
   }
 
   abspath(desc: Descriptor, path: string): string {
@@ -59,6 +61,35 @@ export class TopLevelFs {
       return `${__path === "/" ? "" : __path}/${path}`;
     }
     return path;
+  }
+
+  private emit(eventType: 'rename' | 'change', fullPath: string): void {
+    if (!fullPath) return;
+    const normalized = realpath(fullPath);
+    for (const watcher of Array.from(this.watchers)) {
+      if (watcher.signal.aborted) {
+        this.watchers.delete(watcher);
+        continue;
+      }
+      const base = watcher.path;
+      let matches = false;
+      let filename: string | null = null;
+
+      if (normalized === base) {
+        matches = true;
+        filename = basename(normalized);
+      } else {
+        const prefix = base === "/" ? "/" : base + "/";
+        if (normalized.startsWith(prefix)) {
+          matches = true;
+          filename = normalized.slice(prefix.length);
+        }
+      }
+
+      if (matches && filename !== null) {
+        watcher.enqueue({ eventType, filename, fullPath: normalized });
+      }
+    }
   }
 
   private async getDescInfo(
@@ -172,6 +203,7 @@ export class TopLevelFs {
     if (err === constants.WASI_ESUCCESS) {
       if (oflags & constants.WASI_O_TRUNC) {
         await desc.truncate(0n);
+        this.emit('change', rpath);
       }
       return { desc, err, fs, path: rpath };
     } else {
@@ -242,7 +274,9 @@ export class TopLevelFs {
     );
 
     if (err !== constants.WASI_ESUCCESS) return err;
-    return await fs.mkdirat(__desc, basename(__path));
+    const __rc = await fs.mkdirat(__desc, basename(__path));
+    if (__rc === constants.WASI_ESUCCESS) this.emit('rename', __path);
+    return __rc;
   }
 
   // linkpath and linkdesc are in reverse order so that linkdesc can have default value
@@ -264,7 +298,9 @@ export class TopLevelFs {
       constants.WASI_LOOKUPFLAGS_SYMLINK_FOLLOW
     );
     if (err !== constants.WASI_ESUCCESS) return err;
-    return fs.symlinkat(target, desc, basename(linkpath));
+    const __rc = await fs.symlinkat(target, desc, basename(linkpath));
+    if (__rc === constants.WASI_ESUCCESS) this.emit('rename', realpath(path));
+    return __rc;
   }
 
   async mknodat(
@@ -283,7 +319,9 @@ export class TopLevelFs {
     if (err !== constants.WASI_ESUCCESS)
       return err;
 
-    return fs.mknodat(desc, basename(__path), dev, {});
+    const __rc_mknod = await fs.mknodat(desc, basename(__path), dev, {});
+    if (__rc_mknod === constants.WASI_ESUCCESS) this.emit('rename', __path);
+    return __rc_mknod;
   }
 
   async removeEntry(
@@ -304,7 +342,9 @@ export class TopLevelFs {
     );
     if (err !== constants.WASI_ESUCCESS) return err;
     // TODO: this could potentially remove a mount point while it is still mounted
-    return await fs.unlinkat(__desc, basename(__path), is_dir);
+    const __rc_unlink = await fs.unlinkat(__desc, basename(__path), is_dir);
+    if (__rc_unlink === constants.WASI_ESUCCESS) this.emit('rename', __path);
+    return __rc_unlink;
   }
 
   async move(
@@ -395,12 +435,17 @@ export class TopLevelFs {
         if (dirents.length !== 0) return constants.WASI_ENOTEMPTY;
       }
     }
-    return dinfo2.fs.renameat(
+    const __rc_rename = await dinfo2.fs.renameat(
       dinfo1.desc,
       basename(__source),
       dinfo2.desc,
       basename(__target)
     );
+    if (__rc_rename === constants.WASI_ESUCCESS) {
+      this.emit('rename', __source);
+      this.emit('rename', __target);
+    }
+    return __rc_rename;
   }
 
   async addMount(
@@ -540,6 +585,59 @@ export class TopLevelFs {
 
     const { err, content } = await __desc.read_str();
     return { err, path: content };
+  }
+
+  async *watch(
+    path: string,
+    options: {
+      signal: AbortSignal,
+    }
+  ): AsyncGenerator<{ eventType: 'rename' | 'change'; filename: string }> {
+    const wpath = realpath(path);
+    const signal = options?.signal;
+    if (!signal) {
+      throw new Error("watch requires AbortSignal in options.signal");
+    }
+
+    type Event = { eventType: 'rename' | 'change'; filename: string };
+    const queue: Event[] = [];
+    let resolve: (() => void) | null = null;
+
+    const notify = () => {
+      const r = resolve;
+      resolve = null;
+      if (r) r();
+    };
+
+    const enqueue = (e: { eventType: 'rename' | 'change'; filename: string; fullPath: string }) => {
+      queue.push({ eventType: e.eventType, filename: e.filename });
+      notify();
+    };
+
+    const watcher = { path: wpath, enqueue, signal };
+    this.watchers.add(watcher);
+
+    const onAbort = () => notify();
+    signal.addEventListener('abort', onAbort);
+
+    try {
+      while (true) {
+        if (signal.aborted) break;
+        if (queue.length === 0) {
+          await new Promise<void>((res) => {
+            if (signal.aborted) return res();
+            resolve = () => res();
+          });
+          continue;
+        }
+        while (queue.length) {
+          yield queue.shift()!;
+        }
+      }
+    } finally {
+      signal.removeEventListener('abort', onAbort);
+      this.watchers.delete(watcher);
+    }
   }
 
   getMounts(): Record<string, Filesystem> {
