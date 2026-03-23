@@ -162,8 +162,11 @@ export class Jswasi {
           tarStream = gunzip(tarStream);
         } else if (!contentEncoding) {
           const contentType = rootfsTarResponse.headers.get("Content-Type");
-          if (contentType === "application/gzip" || contentType === "application/x-gzip")
+          if (contentType === "application/gzip" || contentType === "application/x-gzip") {
             tarStream = gunzip(tarStream);
+          } else if (__rootfs.endsWith(".tar.gz") || __rootfs.endsWith(".tgz")) {
+            tarStream = gunzip(tarStream);
+          }
         }
 
         if (err === constants.WASI_ENOTRECOVERABLE) {
@@ -312,7 +315,8 @@ function gunzip(tarStream: ReadableStream): ReadableStream {
 // setup filesystem
 async function initFs(fs: TopLevelFs, tar: ArrayBuffer) {
   // @ts-ignore
-  const untar = await import("./third_party/js-untar.js");
+  const untarModule = await import("./third_party/js-untar.js");
+  const untar = untarModule.default || untarModule;
   const untared = await untar(tar);
 
   for (const entry of untared) {
@@ -333,13 +337,14 @@ async function initFs(fs: TopLevelFs, tar: ArrayBuffer) {
       }
       case TAR_FILETYPE.DIRECTORY: {
         const err = await fs.createDir(entry.name)
-        if (err !== constants.WASI_ESUCCESS)
+        if (err !== constants.WASI_ESUCCESS && err !== constants.WASI_EEXIST)
           throw Error("Corrupted rootfs image");
 
         break;
       }
       case TAR_FILETYPE.SYMLINK: {
-        if ((await fs.addSymlink(entry.linkname, entry.name) !== constants.WASI_ESUCCESS))
+        const symlinkErr = await fs.addSymlink(entry.linkname, entry.name);
+        if (symlinkErr !== constants.WASI_ESUCCESS && symlinkErr !== constants.WASI_EEXIST)
           throw Error("Corrupted rootfs image");
 
         break;

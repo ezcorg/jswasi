@@ -247,12 +247,15 @@ export class HtermDeviceDriver implements TerminalDriver {
 
     const __term = this.__initTerminal(__args.terminal);
     this.terminals[__ttyMin] = __term;
-    this.__initFsaDropImport(
-      __ttyMin,
-      __args.terminal.div_.getElementsByTagName("iframe")[0].contentWindow!,
-      () => {},
-      this.processManager
-    );
+    const iframe = __args.terminal.div_?.getElementsByTagName?.("iframe")?.[0];
+    if (iframe?.contentWindow) {
+      this.__initFsaDropImport(
+        __ttyMin,
+        iframe.contentWindow,
+        () => {},
+        this.processManager
+      );
+    }
     return constants.WASI_ESUCCESS;
   }
 

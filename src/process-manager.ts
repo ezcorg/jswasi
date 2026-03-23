@@ -260,6 +260,7 @@ export default class ProcessManager {
       foreground
     );
     worker.onmessage = (event) => this.syscallCallback(event, this);
+    worker.onerror = (event) => console.error(`Worker error (pid ${id}):`, event.message, event);
 
     if (foreground !== null) {
       const __driver = this.driverManager.getDriver(foreground.maj);
