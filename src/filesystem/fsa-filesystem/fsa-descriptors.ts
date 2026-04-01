@@ -296,10 +296,7 @@ export class FsaFileDescriptor
   async flush(): Promise<void> {
     if (this.writer) {
       const writer = this.writer;
-
       this.writer = null;
-      // prevent other processes from closing the same descriptor
-      // TODO: is mutex necessary here?
       try {
         await writer?.close();
       } catch (_) {}
